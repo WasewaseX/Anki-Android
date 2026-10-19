@@ -271,7 +271,7 @@ class AlphaGate(
 class TriadEngine(
     priors: SkillPriors = SkillPriors(),
     gate: AlphaGate = AlphaGate(),
-    gateDayEvents: Int = 300,          // in-app gate trigger (event-count based)
+    private val gateDayEvents: Int = 300,   // in-app gate trigger (event-count based)
 ) {
     val priors = priors
     val gate = gate
