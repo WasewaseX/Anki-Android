@@ -37,7 +37,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="nexus-triad-v1.8.0"
-          APK=$(ls AnkiDroid/build/outputs/apk/debug/*.apk | head -1)
+          APK=$(ls AnkiDroid/build/outputs/apk/full/debug/*.apk 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then APK=$(ls AnkiDroid/build/outputs/apk/*/debug/*.apk | head -1); fi
           echo "APK: $APK"
           {
             echo "Real AnkiDroid build with the NEXUS-TRIAD v1.8 scheduling layer replacing the bare FSRS review entry (PRs #1 and #2 merged as the release gate)."
