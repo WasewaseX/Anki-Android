@@ -30,7 +30,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Assemble debug APK (debug-signed, installable)
-        run: ./gradlew --no-daemon --stacktrace :AnkiDroid:assembleDebug
+        run: ./gradlew --stacktrace :AnkiDroid:assembleDebug --daemon -Pkotlin.daemon.jvmargs=-Xmx4g
 
       - name: Create GitHub Release with the APK
         env:
