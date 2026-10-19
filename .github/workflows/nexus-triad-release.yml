@@ -1,0 +1,50 @@
+name: NEXUS-TRIAD Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nexus-triad-release
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build APK (NEXUS-TRIAD) and publish GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK (debug-signed, installable)
+        run: ./gradlew --no-daemon --stacktrace :AnkiDroid:assembleDebug
+
+      - name: Create GitHub Release with the APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="nexus-triad-v1.8.0"
+          APK=$(ls AnkiDroid/build/outputs/apk/debug/*.apk | head -1)
+          echo "APK: $APK"
+          gh release create "$TAG" "$APK" \
+            --title "AnkiDroid with NEXUS-TRIAD v1.8 (replaces bare FSRS entry)" \
+            --notes "Real AnkiDroid build with the NEXUS-TRIAD v1.8 scheduling layer replacing the bare FSRS review entry (PRs #1 and #2 merged as the release gate).
+
+- FSRS remains the authoritative memory engine INSIDE NEXUS-TRIAD (per the TRIAD spec: FSRS is one of the four components).
+- TRIAD adds: shared cold-start priors, contextual recall predictor P_hybrid = sigmoid(logit(P_FSRS) + alpha*delta_context) with alpha gated at zero until out-of-sample validation, session-scope-only fatigue, NEXUS session controller state.
+- Debug-signed APK (installable after allowing unknown sources). Not affiliated with or endorsed by the AnkiDroid project.
+- Benchmark reference (simulation, NOT real-learner evidence): DPI/h +11.41% vs plain FSRS multi-type, day-28 retention +0.0054, sessions -2.72 min, premature quits 26.2% vs 37.6%. See WasewaseX/NEXUS-AnkiDroid benchmarks/v18_nexus_triad_benchmark." \
+            || gh release upload "$TAG" "$APK" --clobber
