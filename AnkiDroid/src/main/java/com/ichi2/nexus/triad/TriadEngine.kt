@@ -1,38 +1,41 @@
 /*
  * Copyright (c) 2026 WasewaseX
  *
- * NEXUS-TRIAD v1.8 engine — Kotlin port of the validated v1.8 simulation
- * engine (benchmarks/v18_nexus_triad_benchmark, WasewaseX/NEXUS-AnkiDroid).
- *
- * Four components (per the NEXUS-TRIAD spec):
+ * NEXUS-TRIAD v1.9 engine — four components per the TRIAD spec:
  *  1. Cold-start intelligence: shared empirical-Bayes Beta(1,1) priors per
  *     skill; shrunk toward the prior while evidence is scarce.
- *  2. FSRS memory engine (authoritative, EXTERNAL): this engine NEVER
- *     modifies FSRS state; it only READS an optional P_FSRS estimate.
+ *  2. FSRS memory engine (authoritative): the backend computes and owns FSRS
+ *     state; this engine only READS retrievability/stability inputs.
  *  3. Contextual recall predictor: observables only (recent accuracy,
- *     latency slowdown, workload, session-scope fatigue, absence gap).
- *      delta = w_acc*(recent_acc-0.85) - w_lat*max(0,slowdown-1)
- *              - w_wl*max(0, due/30-0.5) - w_fat*fatigueProxy
- *              - w_abs*min(gapDays/7, 1),  clipped to +/- 1.5 logits.
+ *     per-card answer latency slowdown, real workload counts, session-scope
+ *     fatigue, absence gap).
  *  4. NEXUS controller: session-scope state exposed to the host app.
  *
- * Hybrid prediction (user's formula, verbatim):
- *      P_hybrid = sigmoid(logit(P_eff) + alpha * delta_context)
- * with alpha = 0 until the AlphaGate demonstrates reliable out-of-sample
- * value (held-out logloss improvement >= 0.005 with >= 40 logged events).
+ * Fixes carried from the v1.8 code review ( WasewaseX/Anki-Android#TRIAD ):
+ *  - DEFECT 1 (predictor not in the loop): predict() is now pure, and the
+ *    scheduler policy consumes predictions for prioritization + interval
+ *    decisions; the FSRS retrievability input is supplied by the caller.
+ *  - DEFECT 2 (rough proxies): latency is per-card answer time supplied by
+ *    the caller (revlog `timeTaken`), and workload is the real due count
+ *    supplied by the caller — no inter-answer-gap proxy, no hardcoded zero.
+ *  - DEFECT 3 (session reset per answer): session state accumulates; reset
+ *    happens ONLY on an explicit startSession() (driven by idle timeout or
+ *    day rollover in TriadSessions), never as a side effect of answering.
+ *  - DEFECT 4 (alpha gate not independent): alpha is SELECTED on the train
+ *    split and CONFIRMED on a held-out validation split the selection never
+ *    touched.
  *
  * HARD CONSTRAINTS carried from the spec:
  *  - fatigue is SESSION-SCOPE ONLY: never persisted, never touches FSRS
  *    stability, recomputed fresh each session;
- *  - no silent due-review skipping (controller must never drop due work);
- *  - alpha = 0 until validated out-of-sample (conservative gate).
+ *  - no silent due-review skipping;
+ *  - alpha = 0 until validated out-of-sample (conservative gate);
+ *  - alpha = 0 makes every decision identical to the FSRS baseline.
  *
  * Pure Kotlin: no Android, no serialization, no coroutines dependencies.
  */
 package com.ichi2.nexus.triad
 
-import kotlin.math.exp
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 
@@ -52,70 +55,63 @@ data class TriadAnswerRecord(
     val sessionEvents: Int,
 )
 
-object TriadMath {
-    fun clip(x: Double, lo: Double, hi: Double): Double = max(lo, min(hi, x))
-
-    fun logit(p: Double): Double {
-        val q = clip(p, 1e-4, 1.0 - 1e-4)
-        return ln(q / (1.0 - q))
-    }
-
-    fun sigmoid(x: Double): Double =
-        if (x >= 0.0) 1.0 / (1.0 + exp(-x)) else {
-            val z = exp(x); z / (1.0 + z)
-        }
-
-    /** The user's formula: P_hybrid = sigmoid(logit(P_eff) + alpha*delta). */
-    fun hybrid(pEff: Double, delta: Double, alpha: Double): Double =
-        if (alpha == 0.0) clip(pEff, 1e-4, 1.0 - 1e-4)
-        else sigmoid(logit(pEff) + alpha * delta)
-
-    fun brier(preds: List<Pair<Double, Int>>): Double =
-        preds.sumOf { (p, y) -> (p - y) * (p - y) } / preds.size
-
-    fun logLoss(preds: List<Pair<Double, Int>>): Double {
-        val eps = 1e-6
-        return preds.sumOf { (p, y) ->
-            -(y * ln(max(p, eps)) + (1 - y) * ln(max(1.0 - p, eps)))
-        } / preds.size
-    }
-}
-
 /**
  * Component 1 — cold-start intelligence.
- * Per-skill Beta(1,1) posteriors over observed outcomes; shrunk_level blends
+ * Per-skill Beta(1,1) posteriors over observed outcomes; shrunkLevel blends
  * an observed EMA with the prior mean via n/(n+k) shrinkage.
  */
-class SkillPriors(private val kSkill: Double = 8.0, private val kCard: Double = 3.0) {
+class SkillPriors(
+    private val kSkill: Double = 8.0,
+    private val kCard: Double = 3.0,
+) {
     private val alpha = HashMap<String, Double>()
     private val beta = HashMap<String, Double>()
-
-    init {
-        // (per-skill map is lazy; missing == Beta(1,1) -> mean 0.5)
-    }
 
     private fun a(skill: String) = alpha.getOrPut(skill) { 1.0 }
     private fun b(skill: String) = beta.getOrPut(skill) { 1.0 }
 
-    fun update(skill: String, correct: Boolean) {
+    fun update(
+        skill: String,
+        correct: Boolean,
+    ) {
         if (correct) alpha[skill] = a(skill) + 1.0 else beta[skill] = b(skill) + 1.0
     }
 
     fun mean(skill: String): Double = a(skill) / (a(skill) + b(skill))
 
-    fun shrunkLevel(skill: String, observedLevel: Double, n: Int): Double =
-        (n * observedLevel + kSkill * mean(skill)) / (n + kSkill)
+    fun shrunkLevel(
+        skill: String,
+        observedLevel: Double,
+        n: Int,
+    ): Double = (n * observedLevel + kSkill * mean(skill)) / (n + kSkill)
 
     /** Cold-start prediction shrinkage for cards with < kCard reviews. */
-    fun shrunkP(skill: String, pSched: Double, cardReviews: Int): Double {
+    fun shrunkP(
+        skill: String,
+        pSched: Double,
+        cardReviews: Int,
+    ): Double {
         if (cardReviews >= kCard.toInt()) return TriadMath.clip(pSched, 1e-4, 1.0 - 1e-4)
         return (cardReviews * pSched + kCard * mean(skill)) / (kCard + cardReviews)
+    }
+
+    /** Persisted-state accessors (JSON store). */
+    fun snapshot(): Map<String, Pair<Double, Double>> =
+        (alpha.keys + beta.keys).associateWith { a(it) to b(it) }
+
+    fun restore(priors: Map<String, Pair<Double, Double>>) {
+        priors.forEach { (skill, ab) ->
+            alpha[skill] = ab.first
+            beta[skill] = ab.second
+        }
     }
 }
 
 /**
  * Component 3 — contextual recall predictor over OBSERVABLES only.
- * Session-scope quantities reset in startSession() and never persist.
+ * All inputs are supplied by the caller (defect 2 fix): per-card answer
+ * latency, real due/workload counts, day stamps.
+ * Session-scope quantities reset ONLY in startSession() and never persist.
  */
 class ContextState(
     private val wAcc: Double = 2.0,
@@ -135,17 +131,25 @@ class ContextState(
     private val latRecent = HashMap<String, Double>()
     private val cardReviews = HashMap<Long, Int>()
 
-    // session scope (reset each session)
-    var sessionEvents = 0; private set
-    var sessionElapsedMin = 0.0; private set
-    private var sessionBudgetMin = 1.0
+    // session scope (reset each session via startSession only)
+    var sessionEvents = 0
+        private set
+    var sessionElapsedMin = 0.0
+        private set
+    private var sessionBudgetMin = 20.0
     private var dueCount = 0
 
-    // absence history
-    var lastDay: Long? = null; private set
-    var gapDays = 0L; private set
+    // absence history (persisted scope — set by noteDay/endSession)
+    var lastDay: Long? = null
+        private set
+    var gapDays = 0L
+        private set
 
-    fun startSession(day: Long, dueCountIn: Int, budgetMin: Double) {
+    fun startSession(
+        day: Long,
+        dueCountIn: Int,
+        budgetMin: Double,
+    ) {
         sessionEvents = 0
         sessionElapsedMin = 0.0
         sessionBudgetMin = max(1e-6, budgetMin)
@@ -153,30 +157,46 @@ class ContextState(
         lastDay?.let { gapDays = max(0L, day - it) }
     }
 
-    fun endSession(day: Long) { lastDay = day }
+    fun endSession(day: Long) {
+        lastDay = day
+    }
 
-    fun observeEvent(kind: String, minutes: Double, skill: String, correct: Boolean) {
+    /** Real workload input (defect 2 fix) — refreshable mid-session. */
+    fun updateWorkload(dueCountIn: Int) {
+        dueCount = dueCountIn
+    }
+
+    fun observeEvent(
+        kind: String,
+        minutes: Double,
+        correct: Boolean,
+    ) {
         val x = if (correct) 1.0 else 0.0
         accEma = (1.0 - accEmaRate) * accEma + accEmaRate * x
         val m = max(1e-6, minutes)
         val prev = latEma[kind]
         if (prev == null) {
-            latEma[kind] = m; latRecent[kind] = m
+            latEma[kind] = m
+            latRecent[kind] = m
         } else {
             latEma[kind] = (1.0 - latEmaRate) * prev + latEmaRate * m
             val r = latRecent[kind] ?: m
             latRecent[kind] = 0.5 * r + 0.5 * m
         }
         sessionEvents += 1
-        // skill evidence tracked by SkillPriors via update(); nothing else here
     }
 
-    fun observeCard(cardId: Long) { cardReviews[cardId] = (cardReviews[cardId] ?: 0) + 1 }
+    fun observeCard(cardId: Long) {
+        cardReviews[cardId] = (cardReviews[cardId] ?: 0) + 1
+    }
+
     fun reviews(cardId: Long): Int = cardReviews[cardId] ?: 0
 
-    fun addElapsed(minutes: Double) { sessionElapsedMin += max(0.0, minutes) }
+    fun addElapsed(minutes: Double) {
+        sessionElapsedMin += max(0.0, minutes)
+    }
 
-    /** SESSION SCOPE ONLY. */
+    /** SESSION SCOPE ONLY (hard constraint: never persisted, never touches FSRS). */
     fun fatigueProxy(): Double = sessionEvents / 40.0 + sessionElapsedMin / sessionBudgetMin
 
     /** Kind-controlled latency ratio (recent vs career EMA); >1 = slowing. */
@@ -202,166 +222,303 @@ class ContextState(
 
 /**
  * Component 3 gate — alpha = 0 until out-of-sample validation succeeds.
- * Deterministic systematic 30% validation split (seq % 10 < 3).
+ *
+ * DEFECT 4 FIX — two independent splits:
+ *  - TRAIN (i % 10 >= 3): used to SELECT alpha* (max logloss improvement).
+ *  - VALIDATION (i % 10 < 3): held out from selection; alpha* is accepted
+ *    only if it also improves the VALIDATION logloss by >= minImprovement.
+ * The selection set and the confirmation set are disjoint by construction.
+ * Deterministic (systematic split), no randomness.
  */
 class AlphaGate(
     private val grid: List<Double> = listOf(0.0, 0.25, 0.5, 0.75, 1.0),
     private val valFraction: Double = 0.3,
-    private val minEvents: Int = 40,
+    private val minEvents: Int = 300,
     private val minImprovement: Double = 0.005,
+    private val minDistinctDays: Int = 14,
+    private val minValEvents: Int = 12,
+    private val minTrainEvents: Int = 20,
 ) {
-    var alpha = 0.0; private set
-    var fitted = false; private set
-    var fitSummary: Map<String, Double> = emptyMap(); private set
-    private val rows = ArrayList<Quadruple<Int, Double, Double, Int>>()
+    var alpha = 0.0
+        private set
+    var fitted = false
+        private set
+    var fitSummary: Map<String, Double> = emptyMap()
+        private set
+    private val rows = ArrayList<Row>()
     private var seq = 0
 
-    data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+    data class Row(
+        val day: Long,
+        val pEff: Double,
+        val delta: Double,
+        val correct: Int,
+    )
 
-    /** Log one DUE-review prediction (made BEFORE the outcome was observed). */
-    fun log(day: Int, pEff: Double, delta: Double, correct: Boolean) {
-        rows.add(Quadruple(day, pEff, delta, if (correct) 1 else 0))
+    fun log(
+        day: Long,
+        pEff: Double,
+        delta: Double,
+        correct: Boolean,
+    ) {
+        rows.add(Row(day, pEff, delta, if (correct) 1 else 0))
         seq += 1
     }
 
-    /** Attempt the one-time out-of-sample fit; returns true if fitted now. */
-    fun maybeFit(day: Int, gateDay: Int = 14): Boolean {
-        if (fitted || day < gateDay) return false
+    fun loggedCount(): Int = rows.size
+
+    fun distinctDays(): Int = rows.map { it.day }.toSet().size
+
+    fun allPredictions(): List<Triple<Double, Double, Int>> = rows.map { Triple(it.pEff, it.delta, it.correct) }
+
+    /** Ready if volume AND time-diversity conditions hold (prevents one-binge fits). */
+    fun readyToFit(): Boolean = rows.size >= minEvents && distinctDays() >= minDistinctDays
+
+    /**
+     * One-time fit: select on TRAIN, confirm on held-out VALIDATION.
+     * Returns true if alpha moved above 0.
+     */
+    fun maybeFit(): Boolean {
+        if (fitted) return alpha > 0.0
         fitted = true
-        if (rows.size < minEvents) {
-            fitSummary = mapOf("n" to rows.size.toDouble(), "alpha" to 0.0)
+        if (!readyToFit()) {
+            fitSummary =
+                mapOf(
+                    "n" to rows.size.toDouble(),
+                    "days" to distinctDays().toDouble(),
+                    "alpha" to 0.0,
+                )
             return false
         }
         val nVal = max(1, Math.round(valFraction * 10).toInt())
         val validation = rows.filterIndexed { i, _ -> i % 10 < nVal }
         val train = rows.filterIndexed { i, _ -> i % 10 >= nVal }
-        if (train.isEmpty() || validation.isEmpty()) {
-            fitSummary = mapOf("n" to rows.size.toDouble(), "alpha" to 0.0)
+        if (train.size < minTrainEvents || validation.size < minValEvents) {
+            fitSummary =
+                mapOf(
+                    "n" to rows.size.toDouble(),
+                    "n_train" to train.size.toDouble(),
+                    "n_val" to validation.size.toDouble(),
+                    "alpha" to 0.0,
+                )
             return false
         }
-        fun ll(rs: List<Quadruple<Int, Double, Double, Int>>, a: Double): Double =
-            TriadMath.logLoss(rs.map { TriadMath.hybrid(it.second, it.third, a) to it.fourth })
 
-        val baseVal = ll(validation, 0.0)
+        fun ll(rs: List<Row>, a: Double): Double = TriadMath.logLoss(rs.map { TriadMath.hybrid(it.pEff, it.delta, a) to it.correct })
+
+        // 1) SELECTION on train only
+        val baseTrain = ll(train, 0.0)
         var bestAlpha = 0.0
-        var bestVal = baseVal
+        var bestTrain = baseTrain
         for (a in grid) {
-            val v = ll(validation, a)
-            if (v < bestVal - 1e-12) { bestAlpha = a; bestVal = v }
+            val v = ll(train, a)
+            if (v < bestTrain - 1e-12) {
+                bestAlpha = a
+                bestTrain = v
+            }
         }
-        val improvement = baseVal - bestVal
-        alpha = if (improvement >= minImprovement && bestAlpha > 0.0) bestAlpha else 0.0
-        fitSummary = mapOf(
-            "n" to rows.size.toDouble(),
-            "alpha" to alpha,
-            "improvement" to improvement,
-        )
-        return true
+        val trainImprovement = baseTrain - bestTrain
+
+        // 2) CONFIRMATION on the untouched validation split
+        val baseVal = ll(validation, 0.0)
+        val valAtBest = ll(validation, bestAlpha)
+        val valImprovement = baseVal - valAtBest
+
+        alpha =
+            if (bestAlpha > 0.0 &&
+                trainImprovement >= minImprovement &&
+                valImprovement >= minImprovement
+            ) {
+                bestAlpha
+            } else {
+                0.0
+            }
+        fitSummary =
+            mapOf(
+                "n" to rows.size.toDouble(),
+                "n_train" to train.size.toDouble(),
+                "n_val" to validation.size.toDouble(),
+                "days" to distinctDays().toDouble(),
+                "train_improvement" to trainImprovement,
+                "val_improvement" to valImprovement,
+                "alpha" to alpha,
+            )
+        return alpha > 0.0
     }
 
-    fun allPredictions(): List<Triple<Double, Double, Int>> = rows.map { Triple(it.second, it.third, it.fourth) }
-    fun loggedCount(): Int = rows.size
+    /** Persisted-state accessors (JSON store). */
+    fun rowsSnapshot(): List<Row> = rows.toList()
+
+    fun restore(
+        restoredRows: List<Row>,
+        restoredAlpha: Double,
+        restoredFitted: Boolean,
+    ) {
+        rows.clear()
+        rows.addAll(restoredRows)
+        alpha = restoredAlpha
+        fitted = restoredFitted
+    }
 }
 
 /**
- * NEXUS-TRIAD v1.8 facade. FSRS remains the authoritative memory engine:
- * this class never mutates scheduler state. Feed graded answers via
- * [onAnswer]; read P_hybrid via the returned records or [predict].
+ * NEXUS-TRIAD v1.9 facade. The backend owns FSRS state; this class owns the
+ * contextual/prior layer. Session lifecycle is driven externally by
+ * [TriadSessions] (defect 3 fix: no implicit session resets here).
  */
 class TriadEngine(
     priors: SkillPriors = SkillPriors(),
     gate: AlphaGate = AlphaGate(),
-    private val gateDayEvents: Int = 300,   // in-app gate trigger (event-count based)
 ) {
     val priors = priors
     val gate = gate
     val context = ContextState()
-    private var gateTriggered = false
-    private var sessionOpen = false
-    private var sessionStartDay = 0L
-
-    /** day = epoch-day (System.currentTimeMillis / 86_400_000). */
-    fun startSession(day: Long, dueCount: Int, budgetMin: Double) {
-        context.startSession(day, dueCount, budgetMin)
-        sessionOpen = true
-        sessionStartDay = day
-    }
-
-    fun endSession(day: Long) {
-        context.endSession(day)
-        sessionOpen = false
-    }
 
     /**
-     * Predict BEFORE the answer. pFsrs: FSRS retrievability if the host can
-     * supply it (component 2 input); when null, the engine's own per-skill
-     * prior mean is used (declared fallback, flagged in the prediction).
+     * Read-only prediction (defect 1 fix: consumed by the scheduling policy).
+     * Pure — never mutates session state.
+     * [cardReps]: authoritative review count from the host (survives process
+     * restarts); when < 0, the in-memory count is used.
      */
-    fun predict(cardId: Long, skill: String, pFsrs: Double?, dueCount: Int = 0): TriadPrediction {
-        if (!sessionOpen) startSession(sessionStartDay, dueCount, 20.0)
-        val cardN = context.reviews(cardId)
+    fun predict(
+        cardId: Long,
+        skill: String,
+        pFsrs: Double?,
+        dueCount: Int = 0,
+        cardReps: Int = -1,
+    ): TriadPrediction {
+        val cardN = if (cardReps >= 0) cardReps else context.reviews(cardId)
         val base = pFsrs ?: priors.mean(skill)
         val pEff = priors.shrunkP(skill, base, cardN)
         val delta = context.delta()
-        val accepted = gate.fitted && gate.alpha > 0.0
         return TriadPrediction(
             pEff = pEff,
             delta = delta,
             alpha = gate.alpha,
             pHybrid = TriadMath.hybrid(pEff, delta, gate.alpha),
-            alphaAccepted = accepted,
+            alphaAccepted = gate.fitted && gate.alpha > 0.0,
         )
     }
 
     /**
-     * Record one graded answer (called AFTER the backend scheduled it).
-     * correct = rating != AGAIN. kind/latency: observable proxies.
+     * Record one graded answer. The caller supplies observables explicitly:
+     * pFsrs (backend retrievability), latencyMin (per-card answer time),
+     * day (epoch day), dueCount (real due count).
      */
     fun onAnswer(
         cardId: Long,
         skill: String,
         ratingAgain: Boolean,
-        pFsrs: Double? = null,
-        latencyMin: Double = 0.0,
-        day: Long = 0L,
-        dueCount: Int = 0,
+        pFsrs: Double?,
+        latencyMin: Double,
+        day: Long,
+        dueCount: Int,
+        cardReps: Int = -1,
     ): TriadAnswerRecord {
-        if (!sessionOpen) startSession(if (day != 0L) day else 0L, dueCount, 20.0)
-        // predict-then-observe (the prediction was logged with the outcome)
-        val cardN = context.reviews(cardId)
+        context.updateWorkload(dueCount)
+        val cardN = if (cardReps >= 0) cardReps else context.reviews(cardId)
         val base = pFsrs ?: priors.mean(skill)
         val pEff = priors.shrunkP(skill, base, cardN)
         val delta = context.delta()
         val correct = !ratingAgain
-        gate.log((day % Int.MAX_VALUE).toInt(), pEff, delta, correct)
-        // observe
+        // predict-then-observe: pEff/delta depend only on pre-answer state
+        gate.log(day, pEff, delta, correct)
         context.observeCard(cardId)
-        context.observeEvent("review", latencyMin, skill, correct)
+        context.observeEvent("review", latencyMin, correct)
         context.addElapsed(latencyMin)
         priors.update(skill, correct)
-        // one-time out-of-sample gate
-        if (!gateTriggered && gate.loggedCount() >= gateDayEvents) {
-            gate.maybeFit(Int.MAX_VALUE, Int.MAX_VALUE - 1) // fit NOW (day arg bypass)
-            gateTriggered = true
-        }
+        // one-time out-of-sample gate (volume + time-diversity conditions)
+        gate.maybeFit()
         return TriadAnswerRecord(
-            prediction = TriadPrediction(
-                pEff, delta, gate.alpha,
-                TriadMath.hybrid(pEff, delta, gate.alpha),
-                gate.fitted && gate.alpha > 0.0,
-            ),
+            prediction =
+                TriadPrediction(
+                    pEff,
+                    delta,
+                    gate.alpha,
+                    TriadMath.hybrid(pEff, delta, gate.alpha),
+                    gate.fitted && gate.alpha > 0.0,
+                ),
             correct = correct,
             sessionEvents = context.sessionEvents,
         )
     }
 
-    /** Controller snapshot (component 4 inputs for the host app). */
-    fun controllerSnapshot(): Map<String, Double> = mapOf(
-        "recent_acc" to context.recentAcc(),
-        "fatigue_proxy" to context.fatigueProxy(),
-        "slowdown" to context.slowdown(),
-        "delta" to context.delta(),
-        "alpha" to gate.alpha,
-        "session_events" to context.sessionEvents.toDouble(),
+    /**
+     * Interval decision (the authoritative TRIAD decision, consumed by the
+     * policy layer before the backend applies the answer).
+     *
+     * Rule: choose the interval whose FSRS-predicted recall equals the
+     * context-shifted target
+     *     P_target = sigmoid(logit(desiredRetention) - alpha * delta)
+     * i.e. the hybrid curve sigma(logit(R_fsrs(t)) + alpha*delta) hits
+     * desiredRetention at the chosen t (the user's formula, applied along
+     * the time axis).
+     *
+     * IDENTITY GUARANTEE: alpha == 0 => P_target == desiredRetention, which
+     * is exactly what the backend inverted to produce fsrsScheduledDays, so
+     * the decision is the FSRS baseline. We short-circuit alpha==0 to the
+     * FSRS interval to make this identity exact rather than float-lucky.
+     */
+    data class IntervalDecision(
+        val intervalDays: Int,
+        val ratioToFsrs: Double,
+        val applied: Boolean,
+        val reason: String,
     )
+
+    fun decideReviewInterval(
+        alpha: Double,
+        delta: Double,
+        desiredRetention: Double,
+        fsrsScheduledDays: Int,
+        stability: Double,
+        decay: Double,
+        config: TriadConfig,
+    ): IntervalDecision {
+        if (fsrsScheduledDays < 1) {
+            return IntervalDecision(fsrsScheduledDays, 1.0, false, "fsrs_interval_lt_1d")
+        }
+        if (alpha == 0.0) {
+            return IntervalDecision(fsrsScheduledDays, 1.0, false, "alpha_zero_identity")
+        }
+        if (!config.intervalOwnershipEnabled) {
+            return IntervalDecision(fsrsScheduledDays, 1.0, false, "interval_ownership_disabled")
+        }
+        val pTarget = TriadMath.clip(
+            TriadMath.sigmoid(TriadMath.logit(desiredRetention) - alpha * delta),
+            0.5,
+            0.99,
+        )
+        val tTarget = TriadMath.intervalForTarget(pTarget, stability, decay)
+        val fsrsDays = fsrsScheduledDays.toDouble()
+        val clamped = TriadMath.clip(
+            tTarget,
+            fsrsDays * config.minIntervalRatio,
+            min(fsrsDays * config.maxIntervalRatio, config.maxIntervalDays.toDouble()),
+        ).coerceAtLeast(1.0)
+        val finalDays = clamped.toInt().coerceAtLeast(1)
+        val ratio = finalDays / fsrsDays
+        return IntervalDecision(
+            intervalDays = finalDays,
+            ratioToFsrs = ratio,
+            applied = finalDays != fsrsScheduledDays,
+            reason =
+                if (finalDays != fsrsScheduledDays) {
+                    "triad_context_adjusted"
+                } else {
+                    "within_rounding_of_fsrs"
+                },
+        )
+    }
+
+    /** Controller snapshot (component 4 inputs for the host app). */
+    fun controllerSnapshot(): Map<String, Double> =
+        mapOf(
+            "recent_acc" to context.recentAcc(),
+            "fatigue_proxy" to context.fatigueProxy(),
+            "slowdown" to context.slowdown(),
+            "delta" to context.delta(),
+            "alpha" to gate.alpha,
+            "session_events" to context.sessionEvents.toDouble(),
+        )
 }
