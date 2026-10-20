@@ -36,17 +36,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="nexus-triad-v1.8.0"
+          TAG="nexus-triad-v1.9.0"
           APK=$(ls AnkiDroid/build/outputs/apk/full/debug/*.apk 2>/dev/null | head -1)
           if [ -z "$APK" ]; then APK=$(ls AnkiDroid/build/outputs/apk/*/debug/*.apk | head -1); fi
           echo "APK: $APK"
           {
-            echo "Real AnkiDroid build with the NEXUS-TRIAD v1.8 scheduling layer replacing the bare FSRS review entry (PRs #1 and #2 merged as the release gate)."
+            echo "Real AnkiDroid build with NEXUS-TRIAD v1.9 — a genuine scheduling policy on the authoritative backend path (not a passive tracker)."
             echo ""
-            echo "- FSRS remains the authoritative memory engine INSIDE NEXUS-TRIAD (per the TRIAD spec: FSRS is one of the four components)."
-            echo "- TRIAD adds: shared cold-start priors, contextual recall predictor P_hybrid = sigmoid(logit(P_FSRS) + alpha*delta_context) with alpha gated at zero until out-of-sample validation, session-scope-only fatigue, NEXUS session controller state."
-            echo "- Debug-signed APK (installable after allowing unknown sources). Not affiliated with or endorsed by the AnkiDroid project."
-            echo "- Benchmark reference (simulation, NOT real-learner evidence): DPI/h +11.41 percent vs plain FSRS multi-type, day-28 retention +0.0054, sessions -2.72 min, premature quits 26.2 vs 37.6 percent. See WasewaseX/NEXUS-AnkiDroid benchmarks/v18_nexus_triad_benchmark."
+            echo "What TRIAD now owns (all behind the nexus_triad SharedPreferences flag, OFF by default):"
+            echo "- Review prioritization: reorders (never drops) due-review candidates by predicted recall; intraday learning cards always keep backend order."
+            echo "- Interval decisions: for graduated review states only, TRIAD inverts the FSRS power curve at the context-shifted target retention and clamps the result to [0.6x, 1.4x] of the FSRS proposal; the adjusted state is submitted through backend.answerCard (same authoritative call as stock scheduling — persistence/undo/sync untouched)."
+            echo "- Contextual adaptation: recent accuracy, per-card answer latency (revlog timeTaken), REAL due counts, session-scope fatigue, absence gap."
+            echo "- Cold-start priors: per-deck Beta priors shrink predictions for cards with < 3 reviews."
+            echo "- Session control: boundaries on idle timeout / day rollover only; pacing output is a recommendation, never enforced."
+            echo "- Fixed from v1.8: prediction now feeds scheduling; per-card latency + real workload inputs; session state accumulates (no reset per answer); alpha is selected on train and confirmed on a held-out validation split."
+            echo ""
+            echo "Honesty constraints (unchanged): P_hybrid = sigmoid(logit(P_FSRS) + alpha*delta_context) with alpha = 0 until out-of-sample validation (train-selection + held-out confirmation, >= 300 events across >= 14 days). While alpha = 0, TRIAD intervals are EXACTLY the FSRS baseline; no superiority over FSRS is claimed without independent real-learner evaluation. Simulation references (WasewaseX/NEXUS-AnkiDroid) are simulations, not real-learner evidence."
+            echo ""
+            echo "Debug-signed APK (installable after allowing unknown sources). Not affiliated with or endorsed by the AnkiDroid project."
           } > /tmp/notes.md
-          gh release create "$TAG" "$APK" --title "AnkiDroid with NEXUS-TRIAD v1.8 (replaces bare FSRS entry)" --notes-file /tmp/notes.md || true
+          gh release create "$TAG" "$APK" --title "AnkiDroid with NEXUS-TRIAD v1.9 (genuine scheduling policy on the backend path)" --notes-file /tmp/notes.md || true
           gh release upload "$TAG" AnkiDroid/build/outputs/apk/*/debug/*.apk --clobber

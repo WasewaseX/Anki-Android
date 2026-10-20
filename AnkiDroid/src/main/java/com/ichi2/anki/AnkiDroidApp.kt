@@ -47,6 +47,7 @@ import com.ichi2.anki.contextmenu.CardBrowserContextMenu
 import com.ichi2.anki.exception.CollectionLockedException
 import com.ichi2.anki.exception.StorageAccessException
 import com.ichi2.anki.exception.SystemStorageException
+import com.ichi2.anki.libanki.sched.SchedulingPolicyRegistry
 import com.ichi2.anki.logging.FragmentLifecycleLogger
 import com.ichi2.anki.logging.LogType
 import com.ichi2.anki.logging.ProductionCrashReportingTree
@@ -71,6 +72,7 @@ import com.ichi2.anki.startup.ensureCollectionPathSet
 import com.ichi2.anki.startup.getDefaultAnkiDroidDirectory
 import com.ichi2.anki.ui.dialogs.ActivityAgnosticDialogs
 import com.ichi2.anki.widget.RECURRING_WIDGETS
+import com.ichi2.nexus.triad.TriadPolicyHook
 import com.ichi2.utils.ExceptionUtil
 import com.ichi2.utils.LanguageUtil
 import com.ichi2.utils.measureTime
@@ -184,6 +186,11 @@ open class AnkiDroidApp :
         }
 
         ApplicationContextInitializer.setInstance(this)
+
+        // NEXUS-TRIAD v1.9: register the scheduling policy on the authoritative
+        // libanki path. Identity (and no recording) while the master flag is
+        // off; every hook call is failure-isolated inside the policy.
+        SchedulingPolicyRegistry.hook = TriadPolicyHook(this)
 
         initializeAcraCrashReporter()
         initializeNavigator()

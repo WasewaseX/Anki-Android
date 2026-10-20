@@ -877,20 +877,11 @@ abstract class AbstractFlashcardViewer :
                 currentEase = rating
 
                 answerCardInner(rating)
-                // NEXUS-TRIAD v1.8: record the graded answer (failure-isolated;
-                // read-only w.r.t. FSRS - the backend remains the authoritative
-                // memory engine). See com.ichi2.nexus.triad.TriadTracker.
-                try {
-                    currentCard?.let { card ->
-                        com.ichi2.nexus.triad.TriadTracker.onAnswer(
-                            deckId = card.did,
-                            cardId = card.id,
-                            ratingAgain = rating == Rating.AGAIN,
-                        )
-                    }
-                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                    // TRIAD must never break reviewing
-                }
+                // NEXUS-TRIAD v1.9: answer recording and interval decisions
+                // moved INTO the authoritative scheduling path
+                // (SchedulingPolicyRegistry hook inside libanki's Scheduler),
+                // where FSRS retrievability, real due counts and the revlog
+                // answer time are available. Nothing to do here anymore.
                 updateCardAndRedraw()
             }
         }

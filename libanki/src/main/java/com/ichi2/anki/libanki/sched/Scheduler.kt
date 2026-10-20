@@ -125,13 +125,54 @@ open class Scheduler(
     fun describeNextStates(states: SchedulingStates): List<String> = col.backend.describeNextStates(states)
 
     private val queuedCards: QueuedCards
-        get() = col.backend.getQueuedCards(fetchLimit = 1, intradayLearningOnly = false)
+        get() {
+            val hook = SchedulingPolicyRegistry.hook
+            val fetchLimit =
+                if (hook == null) {
+                    1
+                } else {
+                    try {
+                        max(1, hook.queueFetchLimit)
+                    } catch (e: Exception) {
+                        1
+                    }
+                }
+            val queue = col.backend.getQueuedCards(fetchLimit = fetchLimit, intradayLearningOnly = false)
+            if (hook == null || queue.cardsCount <= 1) return queue
+            // Policy may reorder candidates (never drop them): selection must
+            // be a permutation of what the backend queued.
+            return try {
+                val idx = hook.selectQueueCandidate(col, queue)
+                if (idx <= 0 || idx >= queue.cardsCount) {
+                    queue
+                } else {
+                    val entries = queue.cardsList.toMutableList()
+                    val entry = entries.removeAt(idx)
+                    entries.add(0, entry)
+                    queue.toBuilder().clearCards().addAllCards(entries).build()
+                }
+            } catch (e: Exception) {
+                // A broken policy must never break the queue
+                queue
+            }
+        }
+
+    /** Guarded policy hook: identity on null registry or any policy failure. */
+    private fun applySchedulingPolicy(answer: CardAnswer): CardAnswer =
+        SchedulingPolicyRegistry.hook?.let { hook ->
+            try {
+                hook.beforeAnswerCard(col, answer)
+            } catch (e: Exception) {
+                // A broken policy must never break reviewing
+                answer
+            }
+        } ?: answer
 
     open fun answerCard(
         info: CurrentQueueState,
         rating: Rating,
     ): OpChanges =
-        col.backend.answerCard(buildAnswer(info.topCard, info.states, rating)).also {
+        col.backend.answerCard(applySchedulingPolicy(buildAnswer(info.topCard, info.states, rating))).also {
             numberOfAnswersRecorded += 1
         }
 
@@ -142,7 +183,7 @@ open class Scheduler(
     ) {
         val states = col.backend.getSchedulingStates(card.id)
         col.backend.answerCard(
-            buildAnswer(card = card, states = states, rating = rating),
+            applySchedulingPolicy(buildAnswer(card = card, states = states, rating = rating)),
         )
         numberOfAnswersRecorded += 1
         // tests assume the card was mutated
@@ -169,7 +210,7 @@ open class Scheduler(
 
     /** Update card to provided state, and remove it from queue. */
     @LibAnkiAlias("answer_card")
-    fun answerCard(input: CardAnswer): OpChanges = col.backend.answerCard(input)
+    fun answerCard(input: CardAnswer): OpChanges = col.backend.answerCard(applySchedulingPolicy(input))
 
     /**
      * @return Number of new, rev and lrn card to review in selected deck. Sum of elements of counts.
