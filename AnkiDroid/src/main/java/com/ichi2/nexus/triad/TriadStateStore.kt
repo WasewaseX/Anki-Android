@@ -45,7 +45,9 @@ interface TriadStateBackend {
     fun write(json: String)
 }
 
-class TriadFileStateBackend(private val file: File) : TriadStateBackend {
+class TriadFileStateBackend(
+    private val file: File,
+) : TriadStateBackend {
     override fun read(): String? =
         try {
             if (file.exists()) file.readText() else null
@@ -78,12 +80,25 @@ object TriadStateCodec {
             val obj = org.json.JSONObject()
             val priors = org.json.JSONObject()
             for ((skill, ab) in es.priors) {
-                priors.put(skill, org.json.JSONObject().put("a", ab.first).put("b", ab.second))
+                priors.put(
+                    skill,
+                    org.json
+                        .JSONObject()
+                        .put("a", ab.first)
+                        .put("b", ab.second),
+                )
             }
             obj.put("priors", priors)
             val rows = org.json.JSONArray()
             for (r in es.gateRows) {
-                rows.put(org.json.JSONArray().put(r.day).put(r.pEff).put(r.delta).put(r.correct))
+                rows.put(
+                    org.json
+                        .JSONArray()
+                        .put(r.day)
+                        .put(r.pEff)
+                        .put(r.delta)
+                        .put(r.correct),
+                )
             }
             obj.put("gate_rows", rows)
             obj.put("gate_fitted", es.gateFitted)
@@ -165,7 +180,10 @@ class TriadStateStore(
     fun engineState(deckId: Long): TriadEnginePersistentState = state.engines[deckId] ?: TriadEnginePersistentState()
 
     @Synchronized
-    fun updateEngine(deckId: Long, transform: (TriadEnginePersistentState) -> TriadEnginePersistentState) {
+    fun updateEngine(
+        deckId: Long,
+        transform: (TriadEnginePersistentState) -> TriadEnginePersistentState,
+    ) {
         val updated = transform(state.engines[deckId] ?: TriadEnginePersistentState())
         val bounded = updated.copy(gateRows = updated.gateRows.takeLast(maxRows))
         state = state.copy(engines = state.engines + (deckId to bounded))

@@ -140,11 +140,14 @@ class TriadIntervalDecisionTest {
     // ------------------------------------------------------------------
 
     private fun policyWith(alpha: Double): Pair<TriadPolicy, TriadEngine> {
-        val store = TriadStateStore(object : TriadStateBackend {
-            override fun read(): String? = null
+        val store =
+            TriadStateStore(
+                object : TriadStateBackend {
+                    override fun read(): String? = null
 
-            override fun write(json: String) {}
-        })
+                    override fun write(json: String) {}
+                },
+            )
         val policy =
             TriadPolicy(
                 configProvider = { config },
@@ -231,11 +234,14 @@ class TriadIntervalDecisionTest {
 
     @Test
     fun `policy disabled by config is a strict identity`() {
-        val store = TriadStateStore(object : TriadStateBackend {
-            override fun read(): String? = null
+        val store =
+            TriadStateStore(
+                object : TriadStateBackend {
+                    override fun read(): String? = null
 
-            override fun write(json: String) {}
-        })
+                    override fun write(json: String) {}
+                },
+            )
         val policy =
             TriadPolicy(
                 configProvider = { config.copy(enabled = false) },
@@ -257,15 +263,25 @@ class TriadIntervalDecisionTest {
         val learningEntry =
             QueuedCards.QueuedCard
                 .newBuilder()
-                .setCard(anki.cards.Card.newBuilder().setId(1L).setDeckId(1L).setReps(5))
-                .setQueue(QueuedCards.Queue.LEARNING)
+                .setCard(
+                    anki.cards.Card
+                        .newBuilder()
+                        .setId(1L)
+                        .setDeckId(1L)
+                        .setReps(5),
+                ).setQueue(QueuedCards.Queue.LEARNING)
                 .setStates(SchedulingStates.newBuilder().setCurrent(reviewState(3, 5f)))
                 .build()
         val reviewEntry =
             QueuedCards.QueuedCard
                 .newBuilder()
-                .setCard(anki.cards.Card.newBuilder().setId(2L).setDeckId(1L).setReps(5))
-                .setQueue(QueuedCards.Queue.REVIEW)
+                .setCard(
+                    anki.cards.Card
+                        .newBuilder()
+                        .setId(2L)
+                        .setDeckId(1L)
+                        .setReps(5),
+                ).setQueue(QueuedCards.Queue.REVIEW)
                 .setStates(SchedulingStates.newBuilder().setCurrent(reviewState(10, 5f)))
                 .build()
         val queue =
@@ -283,6 +299,7 @@ class TriadIntervalDecisionTest {
     @Test
     fun `prioritization surfaces the most at-risk due review card and drops nothing`() {
         val (policy, _) = policyWith(alpha = 0.0)
+
         fun reviewEntry(
             id: Long,
             stability: Float,
@@ -290,8 +307,13 @@ class TriadIntervalDecisionTest {
         ): QueuedCards.QueuedCard =
             QueuedCards.QueuedCard
                 .newBuilder()
-                .setCard(anki.cards.Card.newBuilder().setId(id).setDeckId(1L).setReps(5))
-                .setQueue(QueuedCards.Queue.REVIEW)
+                .setCard(
+                    anki.cards.Card
+                        .newBuilder()
+                        .setId(id)
+                        .setDeckId(1L)
+                        .setReps(5),
+                ).setQueue(QueuedCards.Queue.REVIEW)
                 .setStates(SchedulingStates.newBuilder().setCurrent(reviewState(10, stability, elapsed)))
                 .build()
 

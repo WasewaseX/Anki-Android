@@ -68,6 +68,7 @@ class SkillPriors(
     private val beta = HashMap<String, Double>()
 
     private fun a(skill: String) = alpha.getOrPut(skill) { 1.0 }
+
     private fun b(skill: String) = beta.getOrPut(skill) { 1.0 }
 
     fun update(
@@ -96,8 +97,7 @@ class SkillPriors(
     }
 
     /** Persisted-state accessors (JSON store). */
-    fun snapshot(): Map<String, Pair<Double, Double>> =
-        (alpha.keys + beta.keys).associateWith { a(it) to b(it) }
+    fun snapshot(): Map<String, Pair<Double, Double>> = (alpha.keys + beta.keys).associateWith { a(it) to b(it) }
 
     fun restore(priors: Map<String, Pair<Double, Double>>) {
         priors.forEach { (skill, ab) ->
@@ -304,7 +304,10 @@ class AlphaGate(
             return false
         }
 
-        fun ll(rs: List<Row>, a: Double): Double = TriadMath.logLoss(rs.map { TriadMath.hybrid(it.pEff, it.delta, a) to it.correct })
+        fun ll(
+            rs: List<Row>,
+            a: Double,
+        ): Double = TriadMath.logLoss(rs.map { TriadMath.hybrid(it.pEff, it.delta, a) to it.correct })
 
         // 1) SELECTION on train only
         val baseTrain = ll(train, 0.0)
@@ -484,18 +487,21 @@ class TriadEngine(
         if (!config.intervalOwnershipEnabled) {
             return IntervalDecision(fsrsScheduledDays, 1.0, false, "interval_ownership_disabled")
         }
-        val pTarget = TriadMath.clip(
-            TriadMath.sigmoid(TriadMath.logit(desiredRetention) - alpha * delta),
-            0.5,
-            0.99,
-        )
+        val pTarget =
+            TriadMath.clip(
+                TriadMath.sigmoid(TriadMath.logit(desiredRetention) - alpha * delta),
+                0.5,
+                0.99,
+            )
         val tTarget = TriadMath.intervalForTarget(pTarget, stability, decay)
         val fsrsDays = fsrsScheduledDays.toDouble()
-        val clamped = TriadMath.clip(
-            tTarget,
-            fsrsDays * config.minIntervalRatio,
-            min(fsrsDays * config.maxIntervalRatio, config.maxIntervalDays.toDouble()),
-        ).coerceAtLeast(1.0)
+        val clamped =
+            TriadMath
+                .clip(
+                    tTarget,
+                    fsrsDays * config.minIntervalRatio,
+                    min(fsrsDays * config.maxIntervalRatio, config.maxIntervalDays.toDouble()),
+                ).coerceAtLeast(1.0)
         val finalDays = clamped.toInt().coerceAtLeast(1)
         val ratio = finalDays / fsrsDays
         return IntervalDecision(

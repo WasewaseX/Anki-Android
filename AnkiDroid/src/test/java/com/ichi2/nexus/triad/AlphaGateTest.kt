@@ -19,7 +19,10 @@ class AlphaGateTest {
      * direction everywhere. alpha should be selected (train) and confirmed
      * (validation).
      */
-    private fun consistentRows(days: Int, perDay: Int): List<AlphaGate.Row> {
+    private fun consistentRows(
+        days: Int,
+        perDay: Int,
+    ): List<AlphaGate.Row> {
         val rows = ArrayList<AlphaGate.Row>()
         for (d in 0 until days) {
             for (i in 0 until perDay) {
@@ -36,7 +39,10 @@ class AlphaGateTest {
      * (i % 10 >= 3) and validation indices (i % 10 < 3): selection finds
      * signal, held-out confirmation must reject it.
      */
-    private fun adversarialRows(days: Int, perDay: Int): List<AlphaGate.Row> {
+    private fun adversarialRows(
+        days: Int,
+        perDay: Int,
+    ): List<AlphaGate.Row> {
         val rows = ArrayList<AlphaGate.Row>()
         var seq = 0
         for (d in 0 until days) {

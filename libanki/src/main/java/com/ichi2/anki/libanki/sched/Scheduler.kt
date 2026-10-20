@@ -149,7 +149,11 @@ open class Scheduler(
                     val entries = queue.cardsList.toMutableList()
                     val entry = entries.removeAt(idx)
                     entries.add(0, entry)
-                    queue.toBuilder().clearCards().addAllCards(entries).build()
+                    queue
+                        .toBuilder()
+                        .clearCards()
+                        .addAllCards(entries)
+                        .build()
                 }
             } catch (e: Exception) {
                 // A broken policy must never break the queue

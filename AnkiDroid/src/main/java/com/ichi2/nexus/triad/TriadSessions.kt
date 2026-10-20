@@ -18,7 +18,9 @@
  */
 package com.ichi2.nexus.triad
 
-class TriadSessions(private val config: TriadConfig) {
+class TriadSessions(
+    private val config: TriadConfig,
+) {
     private var open = false
     private var sessionDay = 0L
     private var lastActivityMs = 0L
