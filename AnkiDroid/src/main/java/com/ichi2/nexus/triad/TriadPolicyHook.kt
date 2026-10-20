@@ -22,7 +22,9 @@ import com.ichi2.anki.libanki.sched.SchedulingPolicyHook
 import java.io.File
 
 /** Production [TriadCardSource] over a live collection. */
-class AnkiCardSource(private val col: Collection) : TriadCardSource {
+class AnkiCardSource(
+    private val col: Collection,
+) : TriadCardSource {
     override fun deckId(cardId: Long): Long = col.getCard(cardId).did
 
     override fun reps(cardId: Long): Int = col.getCard(cardId).reps
@@ -49,7 +51,9 @@ class AnkiCardSource(private val col: Collection) : TriadCardSource {
         }
 }
 
-class TriadPolicyHook(context: Context) : SchedulingPolicyHook {
+class TriadPolicyHook(
+    context: Context,
+) : SchedulingPolicyHook {
     private val appContext: Context = context.applicationContext
     private val prefs: SharedPreferences = NexusTriadSettings.prefs(appContext)
     private val store =
