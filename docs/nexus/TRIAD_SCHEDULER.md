@@ -102,7 +102,7 @@ only).
 | Key | Default | Effect when off |
 |---|---|---|
 | `triad_enabled` | **false** | TRIAD fully inert (no recording, no reorder, no interval change) |
-| `triad_interval_ownership` | true | interval decisions fall back to FSRS identity |
+| `triad_interval_ownership` | **false** (v1.9.1 evidence policy) | interval decisions fall back to FSRS identity; on-device gate acceptance does NOT re-enable them |
 | `triad_prioritization` | true | queue fetch stays at 1 candidate, backend order |
 | `triad_pacing_recommendations` | true | no recommendation computed |
 
@@ -118,9 +118,12 @@ the app-private, versioned JSON file above.
   references in `WasewaseX/NEXUS-AnkiDroid` are simulations, not real-learner
   evidence, and the simulator's behavioral model overlaps with TRIAD's
   contextual assumptions (disclosed circularity).
-- While α = 0 (until ≥ 300 events over ≥ 14 days validate out-of-sample), the
-  scheduler's interval behavior is **exactly** FSRS; only prioritization and
-  observational recording differ.
+- With the v1.9.1 evidence policy, interval ownership ships DISABLED: even with the
+  master flag on and the on-device gate accepted (α > 0), intervals are **exactly**
+  FSRS until an operator explicitly enables `triad_interval_ownership` after the
+  activation protocol below. The only real-data gate to date (v1.7, Duolingo HLR
+  public release, user-level held-out splits) showed no held-out logloss gain beyond
+  FSRS-5 — that is why the default is off.
 - Once α > 0, interval divergence is bounded to ±40% of the FSRS proposal by
   construction, but the *effect* of those adjustments on retention is not yet
   measured in any controlled study.
@@ -130,6 +133,17 @@ the app-private, versioned JSON file above.
 - Prioritization only reorders the fetched candidate window (up to
   `triad_queue_candidates`, default 6); it does not reorder the deck-wide queue
   in the backend.
+
+## Activation protocol (v1.9.1 — for interval ownership only)
+
+1. New evidence PASS recorded in `WasewaseX/NEXUS-AnkiDroid` (`docs/SESSION_CONTROL_AUDIT.md`):
+   a deterministic held-out split with ≥ 0.005 logloss improvement over FSRS-5 and ≥ 40 events,
+   on public data or a preregistered simulation — labeled honestly (simulation ≠ real learner
+   evidence). The v1.7 real-data gate FAILED this bar; that failure is why the default is off.
+2. An explicit operator review referencing step 1, recorded in the release notes of the build
+   that ships the change.
+3. Only then may `triad_interval_ownership` be defaulted on (or enabled per device), with the
+   on-device gate still required to validate (α > 0) before any divergence occurs.
 
 ## Regression tests
 
