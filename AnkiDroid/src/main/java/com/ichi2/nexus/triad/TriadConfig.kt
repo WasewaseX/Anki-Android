@@ -14,8 +14,16 @@ package com.ichi2.nexus.triad
 data class TriadConfig(
     /** Master switch. false = fully inert (no recording, no scheduling effect). */
     val enabled: Boolean = false,
-    /** TRIAD owns review interval decisions through the backend answer path (alpha-gated). */
-    val intervalOwnershipEnabled: Boolean = true,
+    /**
+     * TRIAD owns review interval decisions through the backend answer path (alpha-gated).
+     *
+     * EVIDENCE POLICY (v1.9.1): ships DISABLED. The only real-data gate to date (v1.7,
+     * Duolingo HLR public release, user-level held-out splits) showed NO held-out logloss
+     * gain beyond FSRS-5, so interval adjustments stay off by default and on-device gate
+     * acceptance does NOT re-enable them. Enabling this capability is an explicit operator
+     * decision that must follow the activation protocol in docs/nexus/TRIAD_SCHEDULER.md.
+     */
+    val intervalOwnershipEnabled: Boolean = false,
     /** TRIAD owns review prioritization (review queue only; learning keeps backend order). */
     val prioritizationEnabled: Boolean = true,
     /** Session pacing recommendations are computed (surfaced read-only; never enforced). */

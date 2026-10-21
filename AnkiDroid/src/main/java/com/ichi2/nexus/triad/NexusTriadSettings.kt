@@ -3,7 +3,8 @@
  *
  * NEXUS-TRIAD v1.9 Android adapter: SharedPreferences-backed config loader.
  *
- * All flags default OFF (migration safety): a fresh or upgraded install
+ * Every scheduling-affecting capability defaults OFF (migration safety + evidence
+ * policy v1.9.1): a fresh or upgraded install
  * behaves exactly like stock AnkiDroid until the user enables NEXUS-TRIAD.
  */
 package com.ichi2.nexus.triad
@@ -29,7 +30,8 @@ object NexusTriadSettings {
     fun load(prefs: SharedPreferences): TriadConfig =
         TriadConfig(
             enabled = prefs.getBoolean(KEY_ENABLED, false),
-            intervalOwnershipEnabled = prefs.getBoolean(KEY_INTERVALS, true),
+            // Evidence policy v1.9.1: interval ownership ships OFF; see docs/nexus/TRIAD_SCHEDULER.md
+            intervalOwnershipEnabled = prefs.getBoolean(KEY_INTERVALS, false),
             prioritizationEnabled = prefs.getBoolean(KEY_PRIORITIZATION, true),
             pacingRecommendationsEnabled = prefs.getBoolean(KEY_PACING, true),
             minIntervalRatio = prefs.getFloat(KEY_MIN_RATIO, 0.6f).toDouble(),

@@ -18,7 +18,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TriadIntervalDecisionTest {
-    private val config = TriadConfig(enabled = true, minIntervalRatio = 0.6, maxIntervalRatio = 1.4)
+    // Mechanism tests run with ownership explicitly ON; the SHIPPING default is OFF
+    // (evidence policy v1.9.1, verified by the dedicated test below).
+    private val config =
+        TriadConfig(enabled = true, intervalOwnershipEnabled = true, minIntervalRatio = 0.6, maxIntervalRatio = 1.4)
 
     private fun reviewState(
         scheduledDays: Int,
@@ -130,6 +133,27 @@ class TriadIntervalDecisionTest {
                 stability = 20.0,
                 decay = -0.5,
                 config = config.copy(intervalOwnershipEnabled = false),
+            )
+        assertEquals(20, d.intervalDays)
+        assertFalse(d.applied)
+    }
+
+    @Test
+    fun `interval ownership ships disabled by default under evidence policy`() {
+        // The shipping default config must never adjust intervals, even with the master
+        // switch on and a gate-accepted alpha: activation is an explicit operator decision.
+        assertFalse(TriadConfig.DEFAULT.intervalOwnershipEnabled)
+        assertFalse(TriadConfig(enabled = true).intervalOwnershipEnabled)
+        val engine = TriadEngine()
+        val d =
+            engine.decideReviewInterval(
+                alpha = 0.75,
+                delta = -1.5,
+                desiredRetention = 0.9,
+                fsrsScheduledDays = 20,
+                stability = 20.0,
+                decay = -0.5,
+                config = TriadConfig.DEFAULT.copy(enabled = true),
             )
         assertEquals(20, d.intervalDays)
         assertFalse(d.applied)
